@@ -1,4 +1,5 @@
-Sécurisation d’un serveur vps:
+### Sécurisation d’un serveur vps
+==================================================
 
 mettre à jour le système : 
 sudo apt update 
