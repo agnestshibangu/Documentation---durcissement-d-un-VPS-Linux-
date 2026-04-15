@@ -1,134 +1,29 @@
 ### Sécurisation d’un serveur vps
 ==================================================
+Sécurisation d’un serveur VPS
 
-mettre à jour le système : 
-sudo apt update 
-cette commande met à jour la liste des paquets et dépôts dans notre système mais pas les paquets eux mêmes.
+La première étape consiste à mettre à jour le système afin de garantir que les paquets installés correspondent aux versions les plus récentes disponibles dans les dépôts. La commande sudo apt update télécharge les index des paquets depuis les dépôts définis dans les fichiers /etc/apt/sources.list et /etc/apt/sources.list.d/. Concrètement, le gestionnaire de paquets établit des connexions HTTP ou HTTPS vers les miroirs, récupère des fichiers compressés contenant les métadonnées (versions, dépendances, signatures), puis les stocke localement dans /var/lib/apt/lists/. À ce stade, aucun binaire n’est modifié sur le système.
 
-sudo apt upgrade
-avec cette commande on met à jour les dépôts en eux memes. Cette étape est importante pour les mises à jours de sécurité
+La commande sudo apt upgrade utilise ensuite ces index pour comparer les versions installées (référencées dans /var/lib/dpkg/status) avec celles disponibles. Pour chaque paquet nécessitant une mise à jour, le système télécharge les archives .deb, les décompresse, remplace les fichiers binaires sur le disque, met à jour les bibliothèques partagées, et exécute éventuellement des scripts de post-installation. Cette étape inclut les correctifs de sécurité publiés par les mainteneurs des dépôts.
 
-créer un utilisateur dans le groupe sudo : 
-sudo adduser <username>
+La création d’un utilisateur distinct permet d’éviter l’utilisation directe du compte root. La commande sudo adduser <username> crée une entrée dans /etc/passwd, attribue un identifiant numérique (UID), crée un répertoire personnel dans /home/<username> et copie les fichiers par défaut depuis /etc/skel. Ensuite, sudo usermod -aG sudo <username> ajoute cet utilisateur au groupe sudo. Le mécanisme repose sur le fichier /etc/group, où chaque groupe est associé à une liste d’utilisateurs, et sur /etc/sudoers, qui autorise les membres du groupe sudo à exécuter des commandes avec élévation de privilèges via sudo. La vérification avec getent group sudo interroge le système NSS, qui peut agréger des sources locales ou distantes, et retourne la liste effective des membres du groupe.
 
-puis l’ajouter au groupe sudo
-sudo usermod -aG sudo <username>
+Pour ouvrir une session avec ce nouvel utilisateur, la commande sudo su - <username> lance un shell de connexion. L’option - force le chargement de l’environnement complet du nouvel utilisateur, ce qui implique la lecture de fichiers comme ~/.profile, la définition des variables d’environnement, et le changement du répertoire courant vers son dossier personnel.
 
-pour verifier le contenu d’un groupe
-	getent group <groupname>
+Concernant l’inspection réseau, la commande ip link show remplace les anciens outils comme ifconfig. Le binaire ip en espace utilisateur envoie une requête au noyau via une socket netlink. Le noyau maintient en mémoire une liste de structures net_device, chacune représentant une interface réseau. Il retourne ces structures sérialisées, que ip interprète et affiche sous forme lisible, avec les états des interfaces, leurs adresses MAC et leurs flags.
 
-	pour se logger au nouvel utilisateur
-	sudo su - -login <username>
+La sécurisation de l’accès SSH passe d’abord par la modification du port d’écoute du service. Le démon SSH (sshd) lit sa configuration depuis /etc/ssh/sshd_config au démarrage. Modifier la directive Port change le port sur lequel le socket TCP est bind. Par défaut, SSH écoute sur le port 22, ce qui est connu de tous les scanners automatisés. Ces outils parcourent des plages d’adresses IP et tentent des connexions sur des ports standards en envoyant des paquets SYN. En changeant le port, on ne modifie pas la sécurité intrinsèque du service, mais on réduit la surface exposée aux attaques automatisées basiques. Une fois la configuration modifiée, sudo systemctl restart ssh arrête le processus sshd, libère le socket réseau, puis le redémarre avec les nouveaux paramètres, ce qui recrée un socket lié au nouveau port.
 
-	ifconfig est obsolète. Maintenant on utilise ip link show
-	ip est un binaire utilisateur. il envoie une requête netlink au noyau. Le noyau retourne la liste des interfaces réseaux connues. Chaque interface correspond à une structure net_device en mémoire noyau.
+La désactivation de l’authentification par mot de passe pour root repose sur la directive PermitRootLogin prohibit-password. Cela signifie que même si une connexion SSH est initiée avec l’utilisateur root, le démon refusera toute tentative d’authentification basée sur mot de passe. Seules les clés publiques restent autorisées. Lorsqu’un client SSH se connecte, il initie un échange cryptographique (basé sur Diffie-Hellman ou une variante moderne), puis propose une méthode d’authentification. Le serveur compare la clé publique fournie avec celles présentes dans ~/.ssh/authorized_keys. Si une correspondance est trouvée et que la signature est valide, l’accès est accordé sans transmission de mot de passe.
 
-Sécuriser l’accès SSH : 
-	modifier le port de connexion. Par défaut c’est le 22. 22 est le port par défaut du service ssh. interêt du changement : les scanners automatiques savent que 22 = SSH, donc le port est testé en priorité. Les attaques automatiques scannent le port 22, tentent root, admin, test combiné à des mots de passe faibles. Changer le port SSH permet de passer sous le radar de ces scripts automatisés → moins de tentatives, logs plus propres, moins de charge inutile sur sshd. Ca cache le service mais ne le protège pas. Un scan de type nmap -p- sur tout les ports découvrira le port non standard. Il faudra penser a changer le port sur toutes le configs.
-	sudo nano /etc/ssh/sshd_config
-	et changer la ligne qui correspond
-puis redémarrer ssh avec la nouvelle config
-	sudo systemctl restart ssh
-maintenant pour se connecter il faut preciser le port
-	ssh <username>@<ipaddr> -p <port ssh>
-ensuite, on peut empêcher la connexion par mot de passe sur le compte root
-pour cela on va de nouveau dans /etc/ssh/sshd_config et on change la ligne 
-PermitRootLogin yes → PermitRootLogin prohibit-password
-	
+La génération d’une clé SSH avec ssh-keygen -t ed25519 crée une paire de clés basée sur la courbe elliptique Ed25519. La clé privée est stockée localement et ne doit jamais être transmise. La clé publique est copiée sur le serveur dans ~/.ssh/authorized_keys. Lors de la connexion, le serveur envoie un challenge que seul le détenteur de la clé privée peut signer correctement.
 
-utiliser une clé SSH pour se connecter avec notre nouvel utilisateur
-ssh-keygen -t ed25519
-puis on envoie la clé publique au vps
+L’erreur sudo: cd: command not found provient du fait que cd est une commande interne au shell. Elle n’existe pas sous forme de binaire exécutable dans /bin ou /usr/bin. sudo exécute uniquement des programmes externes. Pour obtenir un shell avec privilèges root, la commande correcte est sudo -s, qui lance un nouveau shell avec UID 0.
 
+La mise en place d’un pare-feu avec UFW repose sur une abstraction simplifiée de iptables ou nftables. Avant son activation, la commande ss -tunap interroge directement le noyau pour afficher les sockets ouverts. Le noyau maintient une table des sockets TCP et UDP, avec leurs états (LISTEN, ESTABLISHED, etc.). Une ligne comme ESTAB indique qu’un handshake TCP complet a eu lieu (SYN, SYN-ACK, ACK), et que des buffers sont alloués pour l’échange de données entre deux adresses IP et ports.
 
+L’activation des logs avec sudo ufw logging on configure le noyau pour journaliser les paquets filtrés. Ces événements sont accessibles via journalctl, qui lit les journaux du système gérés par systemd-journald. La commande sudo ufw default deny incoming modifie la politique par défaut de la table de filtrage : tout paquet entrant qui ne correspond à aucune règle explicite sera rejeté avant d’atteindre un processus utilisateur.
 
-sudo: cd: command not found
-sudo: "cd" is a shell built-in command, it cannot be run directly.
-sudo: the -s option may be used to run a privileged shell.
-sudo: the -D option may be used to run a command in a specific directory.
-→ sudo -s 
+Fail2ban fonctionne en surveillant les fichiers de logs, souvent via le backend systemd ou des fichiers comme /var/log/auth.log. Il analyse les lignes en temps réel, applique des expressions régulières pour détecter des tentatives d’authentification échouées répétées, puis déclenche une action. Cette action consiste généralement à injecter dynamiquement une règle dans le pare-feu (via iptables ou nftables) pour bloquer l’adresse IP source pendant une durée définie. Les paramètres comme maxretry, findtime et bantime contrôlent respectivement le nombre d’échecs tolérés, la fenêtre temporelle d’observation et la durée du bannissement.
 
-Installer le pare feu UFW
-
-
-dpkg -L ufw
-
-Voir les connexions entrantes actives avant UFW
-
-voir les connexions déjà acceptées par le noyau
-ss -tunap
-
-ESTAB 0 0 192.0.2.10:22 198.51.100.4:53421 users:(("sshd",pid=1234,fd=3))
-Interprétation ligne par ligne :
-
-ESTAB : connexion TCP établie
-
-192.0.2.10:22 : ton serveur, port SSH
-
-198.51.100.4:53421 : client distant
-
-sshd : processus qui a accepté la connexion
-
-👉 Ça, c’est une connexion entrante réelle.
-
-maintenant je vais activer les logs pour ufw
-
-sudo ufw logging on      qui apparaitront ici sudo journalctl -f | grep UFW
-
-et maintenant on va bloquer toutes les connexions entrantes avec la commande : 
-
- sudo ufw default deny incoming
-
-il faut affiner la sécurité en bloquant / débloquant certains port sortants. Par défaut, UFW debloque tout
-
-5) Fail2ban : 
-un programme pour éviter les attaques par force brute. Fail2ban vérifie le journal système, les logs, etc. S’il constate qu’une adresse ip a tenté plusieurs fois et a échoué à se connecter, il la bloque automatiquement.
-
-apt update
-
-apt install fail2ban
-
-config de fail2ban dans /etc/fail2ban/jail.local
-
-  GNU nano 7.2                                                 /etc/fail2ban/jail.local *
-[sshd]
-enabled = true
-port = 22
-logpath = /var/log/syslog
-maxretry = 5
-bantime = 1200
-findtime = 300
-backend = systemd
-
-et on l’active avec la commande suivante : 
-
-sudo systemctl status fail2ban
-
-et on garantit qu’il se lance à chaque démarrage du serveur 
-
-sudo systemctl enable fail2ban
-
-et si on change la config 
-
-sudo systemctl restart fail2ban
-
-et maintenant on audit avec lynis ! 
-
-sudo apt update
-
-sudo apt install lynis
-
-lynis –version
-
-lancer un audit 
-
-sudo lynis audit system
-
-on peut consulter les rapports suivants 
-
-
-
-et j’ai ce warning 
-
- ! Can't find any security repository in /etc/apt/sources.list or sources.list.d directory [PKGS-7388]
-      https://cisofy.com/lynis/controls/PKGS-7388/
+Enfin, l’audit avec Lynis repose sur une série de contrôles automatisés. Lorsqu’il signale l’avertissement « Can't find any security repository », cela signifie que dans les sources APT, aucun dépôt dédié aux mises à jour de sécurité n’est explicitement configuré. Sur un système Debian ou Ubuntu, ces dépôts sont généralement identifiés par des entrées contenant security.debian.org ou security.ubuntu.com. Sans ces entrées, le système peut ne pas recevoir certains correctifs critiques indépendamment des mises à jour standards.
